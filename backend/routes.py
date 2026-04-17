@@ -1,11 +1,32 @@
 from flask import Blueprint, jsonify, request
-from models import db, Field, Expense, Harvest
+from models import db, Field, Expense, Harvest, User
 import requests
 import os
 import google.generativeai as genai
 from datetime import datetime
 
 api = Blueprint('api', __name__)
+
+@api.route('/register', methods=['POST'])
+def register():
+    data = request.json
+    if User.query.filter_by(email=data.get('email')).first():
+        return jsonify({'error': 'Email уже зарегистрирован'}), 400
+    
+    user = User(email=data['email'])
+    user.set_password(data['password'])
+    db.session.add(user)
+    db.session.commit()
+    return jsonify({'message': 'Успешная регистрация', 'user': {'email': user.email}}), 201
+
+@api.route('/login', methods=['POST'])
+def login():
+    data = request.json
+    user = User.query.filter_by(email=data.get('email')).first()
+    if user and user.check_password(data.get('password')):
+        # В реальной жизни тут возвращается JWT токен
+        return jsonify({'message': 'Успешный вход', 'user': {'email': user.email}})
+    return jsonify({'error': 'Неверный email или пароль'}), 401
 
 @api.route('/fields', methods=['GET', 'POST'])
 def handle_fields():
