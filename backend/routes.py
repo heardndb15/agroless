@@ -117,15 +117,23 @@ def get_weather(field_id):
 @api.route('/analytics/ai', methods=['POST'])
 def ai_analytics():
     data = request.json
-    question = data.get("question", "Как дела у моего поля?")
+    question = data.get("question", "Проанализируй мои данные")
     
     genai.configure(api_key=os.environ.get("GEMINI_API_KEY", "dummy"))
     model = genai.GenerativeModel('gemini-1.5-flash')
     
+    fields = Field.query.all()
+    expenses = Expense.query.all()
+    harvests = Harvest.query.all()
+    
+    context = "Текущие данные фермы:\nПоля: " + str([f.name + f" ({f.area_ha} га, {f.crop})" for f in fields])
+    context += "\nРасходы: " + str([f"{e.category} - {e.amount * e.unit_price} ₸" for e in expenses])
+    context += "\nУрожай (тонны): " + str([f"{h.yield_tons} т. по {h.sell_price_per_ton} ₸/т" for h in harvests])
+    
+    full_prompt = f"Вы — умный аналитик фермерского хозяйства. Используйте следующие данные ({context}) чтобы делать точные вычеты, расчеты по землям, урожаю и погоде.\nВопрос фермера: {question}"
+
     try:
-        response = model.generate_content(
-            "Вы — умный агроном-эксперт. Отвечайте на вопросы фермера кратко и по делу: " + question
-        )
+        response = model.generate_content(full_prompt)
         return jsonify({"response": response.text})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
