@@ -147,14 +147,43 @@ def ai_analytics():
     expenses = Expense.query.all()
     harvests = Harvest.query.all()
     
-    context = "Текущие данные фермы:\nПоля: " + str([f.name + f" ({f.area_ha} га, {f.crop})" for f in fields])
-    context += "\nРасходы: " + str([f"{e.category} - {e.amount * e.unit_price} ₸" for e in expenses])
-    context += "\nУрожай (тонны): " + str([f"{h.yield_tons} т. по {h.sell_price_per_ton} ₸/т" for h in harvests])
-    
-    full_prompt = f"Вы — умный аналитик фермерского хозяйства. Используйте следующие данные ({context}) чтобы делать точные вычеты, расчеты по землям, урожаю и погоде.\nВопрос фермера: {question}"
+    # --- АГЕНТ 1: Метеоролог (Прогноз погоды) ---
+    weather_reports = []
+    for f in fields:
+        try:
+            url = f"https://api.open-meteo.com/v1/forecast?latitude={f.lat}&longitude={f.lon}&daily=precipitation_sum,temperature_2m_max&timezone=auto"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                daily = resp.json().get('daily', {})
+                precip = sum(daily.get('precipitation_sum', [0][:7]))
+                temp_max = sum(daily.get('temperature_2m_max', [0][:7])) / 7 # средняя макс температура
+                weather_reports.append(f"Поле '{f.name}': Осадки за 7 дней = {precip:.1f} мм, Ср. макс температура = {temp_max:.1f}°C.")
+        except:
+            continue
+    agent1_weather = " ".join(weather_reports) if weather_reports else "Нет данных о погоде."
+
+    # --- АГЕНТ 2: Агро-Бухгалтер (Калькуляция и Вычеты) ---
+    total_expenses = sum(e.amount * e.unit_price for e in expenses)
+    total_revenue = sum(h.yield_tons * h.sell_price_per_ton for h in harvests)
+    profit = total_revenue - total_expenses
+    roi = (profit / total_expenses * 100) if total_expenses > 0 else 0
+    cost_per_ha = total_expenses / sum(f.area_ha for f in fields) if fields else 0
+    agent2_finance = f"Всего расходов: {total_expenses} ₸. Выручка: {total_revenue} ₸. Чистая прибыль: {profit} ₸. Рентабельность (ROI): {roi:.1f}%. Траты на 1 гектар: {cost_per_ha:.1f} ₸/га."
+
+    # --- ГЛАВНЫЙ ОРКЕСТРАТОР: Gemini ИИ ---
+    context = f"""
+Ты Главный Агроном. К тебе поступили отчеты от твоих субагентов по хозяйству:
+1. ИНФОРМАЦИЯ О ПОЛЯХ: {[f"{f.name} ({f.area_ha} га, {f.crop})" for f in fields]}
+2. ОТЧЕТ АГЕНТА-МЕТЕОРОЛОГА: {agent1_weather}
+3. ОТЧЕТ АГЕНТА-БУХГАЛТЕРА: {agent2_finance}
+
+Задача: Проанализируй эти отчеты. Сделай конкретные вычеты (например, если мало дождей и низкая рентабельность, предложи оптимизацию полива или смену культуры). НЕ выдумывай данные, опирайся строго на отчеты агентов. Ответь на запрос фермера.
+
+Запрос фермера: {question}
+    """
 
     try:
-        response = model.generate_content(full_prompt)
+        response = model.generate_content(context)
         return jsonify({"response": response.text})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
